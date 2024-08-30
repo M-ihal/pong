@@ -3,10 +3,13 @@ package pong
 import "core:fmt"
 import "vendor:raylib"
 import "core:math"
+import "core:math/rand"
 
 init_window_size_x : i32 = 960 / 1
 init_window_size_y : i32 = 640 / 1
 init_window_title  : cstring = "Pong"
+
+DEBUG_DRAW :: true
 
 Ball :: struct {
     pos    : vec2,
@@ -75,7 +78,7 @@ init_specials :: proc() {
         sp.special_speed          = 6.0
         sp.special_speed_recover  = 1.0
         sp.special_wait_time      = 0.0
-        sp.special_size_mult_add  = { 0.4, -0.55 }
+        sp.special_size_mult_add  = { -0.4, 0.25 }
         sp.special_hit_power      = 2.5
         sp.special_move_func      = .SQUARE
         sp.special_size_func      = .LINEAR        
@@ -130,6 +133,8 @@ Paddle :: struct {
 
     size_mult : vec2, // Paddle size multiplier, size.x expandse in one direction, size.y in both
 
+    hit_ball_t : f32, // Timer set to 1.0 when hit ball @unused
+
     special_type   : ESpecialType,
     special_state  : ESpecialState,
     special_t      : f32,
@@ -148,11 +153,6 @@ get_paddle_collider :: proc(paddle : Paddle) -> (vec2, vec2) {
     }
     return pos, size
 }
-
-points_l : i32 = 0
-points_r : i32 = 0
-points_l_flash_t : f32 = 0.0
-points_r_flash_t : f32 = 0.0
 
 balls    : [dynamic] Ball
 paddle_l : Paddle
@@ -178,102 +178,8 @@ aabb :: proc(a_pos, a_size : vec2, b_pos, b_size : vec2) -> bool {
 
 check_collision :: proc(paddle : ^Paddle, ball : ^Ball) -> bool {
     p_pos, p_size := get_paddle_collider(paddle^)
+    p_size.x = paddle.size.x
     return aabb(p_pos, p_size, ball.pos, ball.size)
-}
-
-// @todo Move pixel by pixel
-update_paddle :: proc(paddle : ^Paddle, move_dir : i32, delta_time : f32) {
-    paddle.pos.y += auto_cast move_dir * paddle.speed * delta_time
-    paddle.pos.y = clamp(paddle.pos.y, 0.0, cast(f32)raylib.GetScreenHeight() - paddle.size.y)
-
-    special := specials[paddle.special_type]
-
-    switch paddle.special_state {
-        case .NONE: {
-        }
-
-        case ESpecialState.SPECIAL: {
-            paddle.special_t += delta_time * special.special_speed
-            if paddle.special_t >= 1.0 {
-                paddle.special_t = 1.0
-                if special.special_wait_time > 0.0 {
-                    paddle.special_state = .WAIT
-                    paddle.special_wait_t = 0.0
-                } else {
-                    paddle.special_state = .RECOVER
-                }
-            }
-    
-            special_dir : f32 = paddle.side == .LEFT ? 1.0 : -1.0
-
-            for &ball in balls {
-                // @todo
-                // can_be_hit : bool = int(math.sign(ball.dir.x)) != int(special_dir)
-
-                if check_collision(paddle, &ball) {
-                    p_pos, p_size := get_paddle_collider(paddle^)
-                    if(paddle.side == .LEFT) {
-                        ball.pos.x = p_pos.x + p_size.x
-                    } else {
-                        ball.pos.x = p_pos.x - ball.size.x
-                    }
-                    ball.speed_mult = special.special_hit_power
-
-                    if special.special_shoots_forward {
-                        ball.dir = vec2{ special_dir, 0.0 }
-                    } else {
-                        perc, hit := get_ball_paddle_hit_perc(&ball, paddle)
-                        assert(hit)
-                        ball.dir.x = special_dir
-                        ball.dir.y = ((perc - 0.5) * 2.0)
-                        ball.dir = norm(ball.dir)
-                    }
-                }
-            }
-        }
-
-        case .WAIT: {
-            paddle.special_wait_t += delta_time
-            if paddle.special_wait_t >= special.special_wait_time {
-                paddle.special_state = .RECOVER
-            }
-        }
-
-        case .RECOVER: {
-            paddle.special_t -= delta_time * special.special_speed_recover
-            if paddle.special_t <= 0.0 {
-                paddle.special_state = .NONE
-                paddle.special_t = 0.0
-            }
-        }
-    }
-
-    move_func := paddle.special_state == .RECOVER ? special.special_move_func_recover : special.special_move_func
-    size_func := paddle.special_state == .RECOVER ? special.special_size_func_recover : special.special_size_func
-
-    size_perc_t := special_func(paddle.special_t, size_func)
-    size_perc := vec2{ size_perc_t, size_perc_t }
-    
-    paddle.size_mult = add(vec2{ 1, 1 }, mult(special.special_size_mult_add, size_perc))
-
-    window_right := cast(f32)raylib.GetScreenWidth()
-
-    if paddle.special_state == .NONE {
-        if paddle.side == .LEFT {
-            paddle.pos.x = paddle_offset
-        } else {
-            paddle.pos.x = window_right - paddle_offset - paddle.size.x
-        }
-    } else {
-        move_perc_t := special_func(paddle.special_t, move_func)
-        move_perc := move_perc_t
-
-        if paddle.side == .LEFT {
-            paddle.pos.x = paddle_offset + special.special_dist * move_perc
-        } else {
-            paddle.pos.x = window_right - paddle_offset - paddle.size.x - special.special_dist * move_perc
-        }
-    }
 }
 
 get_ball_paddle_hit_perc :: proc(ball : ^Ball, paddle : ^Paddle) -> (f32, bool) {
@@ -333,8 +239,8 @@ update_ball :: proc(ball : ^Ball, delta_time : f32) {
         }
     }
 
-    check_for_paddle(&paddle_l, ball, &next_pos, &next_dir)
-    check_for_paddle(&paddle_r, ball, &next_pos, &next_dir)
+    // check_for_paddle(&paddle_l, ball, &next_pos, &next_dir)
+    // check_for_paddle(&paddle_r, ball, &next_pos, &next_dir)
 
     // @temp Points
 
@@ -371,6 +277,7 @@ update_ball :: proc(ball : ^Ball, delta_time : f32) {
 draw_ball :: proc(ball : Ball) {
     ball_color := ball.color
     // ball_color.x = u8((ball.speed_mult - 1.0) * 255.0)
+    ball_color.a = 128
     ball_center := add(ball.pos, mult_f(ball.size, 0.5))
     ball_radius := mult_f(ball.size, 0.5)
     raylib.DrawEllipse(auto_cast ball_center.x, auto_cast ball_center.y, auto_cast ball_radius.x, auto_cast ball_radius.y, ball_color)
@@ -383,7 +290,7 @@ draw_ball :: proc(ball : Ball) {
     }
 
     /* Direction */
-    if true {
+    if false {
         line_col := raylib.Color{ 0x44, 0xAA, 0x33, 0xFF }
         line_len : f32 = 48.0
         line_start := add(ball.pos, mult_f(ball.size, 0.5))
@@ -404,8 +311,231 @@ draw_paddle :: proc(paddle : Paddle) {
     raylib.DrawRectangle(auto_cast draw_pos.x, auto_cast draw_pos.y, auto_cast draw_size.x, auto_cast draw_size.y, paddle_color)
 
     /* Base size */
-    if true {
+    if false {
         raylib.DrawRectangle(auto_cast paddle.pos.x, auto_cast paddle.pos.y, auto_cast paddle.size.x, auto_cast paddle.size.y, { 255, 255, 255, 32 })
+    }
+}
+
+PlayerKeyBinds :: struct {
+    move_up      : raylib.KeyboardKey,
+    move_down    : raylib.KeyboardKey,
+    special_move : raylib.KeyboardKey,
+}
+
+update_paddle_special :: proc(paddle : ^Paddle, delta_time : f32) {
+    special := specials[paddle.special_type]
+
+    switch paddle.special_state {
+        case .NONE: {
+        }
+
+        case ESpecialState.SPECIAL: {
+            paddle.special_t += delta_time * special.special_speed
+            if paddle.special_t >= 1.0 {
+                paddle.special_t = 1.0
+                if special.special_wait_time > 0.0 {
+                    paddle.special_state = .WAIT
+                    paddle.special_wait_t = 0.0
+                } else {
+                    paddle.special_state = .RECOVER
+                }
+            }
+    
+            special_dir : f32 = paddle.side == .LEFT ? 1.0 : -1.0
+
+            for &ball in balls {
+                // @todo
+                // can_be_hit : bool = int(math.sign(ball.dir.x)) != int(special_dir)
+
+                if check_collision(paddle, &ball) {
+                    p_pos, p_size := get_paddle_collider(paddle^)
+                    if(paddle.side == .LEFT) {
+                        ball.pos.x = p_pos.x + p_size.x
+                    } else {
+                        ball.pos.x = p_pos.x - ball.size.x
+                    }
+                    ball.speed_mult = special.special_hit_power
+
+                    if special.special_shoots_forward {
+                        ball.dir = vec2{ special_dir, 0.0 }
+                    } else {
+                        perc, hit := get_ball_paddle_hit_perc(&ball, paddle)
+                        assert(hit)
+                        ball.dir.x = special_dir
+                        ball.dir.y = ((perc - 0.5) * 2.0)
+                        ball.dir = norm(ball.dir)
+
+                        paddle.hit_ball_t = 1.0
+                    }
+                }
+            }
+        }
+
+        case .WAIT: {
+            paddle.special_wait_t += delta_time
+            if paddle.special_wait_t >= special.special_wait_time {
+                paddle.special_state = .RECOVER
+            }
+        }
+
+        case .RECOVER: {
+            paddle.special_t -= delta_time * special.special_speed_recover
+            if paddle.special_t <= 0.0 {
+                paddle.special_state = .NONE
+                paddle.special_t = 0.0
+            }
+        }
+    }
+
+    move_func := paddle.special_state == .RECOVER ? special.special_move_func_recover : special.special_move_func
+    size_func := paddle.special_state == .RECOVER ? special.special_size_func_recover : special.special_size_func
+
+    size_perc_t := special_func(paddle.special_t, size_func)
+    size_perc := vec2{ size_perc_t, size_perc_t }
+    
+    paddle.size_mult = add(vec2{ 1, 1 }, mult(special.special_size_mult_add, size_perc))
+
+    window_right := cast(f32)raylib.GetScreenWidth()
+
+    if paddle.special_state == .NONE {
+        if paddle.side == .LEFT {
+            paddle.pos.x = paddle_offset
+        } else {
+            paddle.pos.x = window_right - paddle_offset - paddle.size.x
+        }
+    } else {
+        move_perc_t := special_func(paddle.special_t, move_func)
+        move_perc := move_perc_t
+
+        if paddle.side == .LEFT {
+            paddle.pos.x = paddle_offset + special.special_dist * move_perc
+        } else {
+            paddle.pos.x = window_right - paddle_offset - paddle.size.x - special.special_dist * move_perc
+        }
+    }
+}
+
+update_paddle :: proc(paddle : ^Paddle, binds : PlayerKeyBinds, delta_time : f32) {
+    /* Special */
+    if raylib.IsKeyDown(binds.special_move) {
+        if paddle.special_state == .NONE {
+            paddle.special_state = .SPECIAL
+            paddle.special_t  = 0.0
+        }
+    }
+
+    screen_height := cast(f32)raylib.GetScreenHeight()
+
+    /* Move Y-Axis */
+    dir : i32 = 0
+    if raylib.IsKeyDown(binds.move_up)   { dir -= 1 }
+    if raylib.IsKeyDown(binds.move_down) { dir += 1 }
+    paddle.pos.y += auto_cast dir * paddle.speed * delta_time
+    paddle.pos.y = clamp(paddle.pos.y, 0.0, screen_height - paddle.size.y)
+
+    num_special_updates : i32 = 32
+    part_delta_time := delta_time / cast(f32)num_special_updates
+
+    for idx in 1..=num_special_updates {
+        update_paddle_special(paddle, part_delta_time)
+    }
+}
+
+game_time_min : i32 = 0;
+game_time_sec : f32 = 0.0;
+game_time_min_flash_t : f32 = 0.0
+game_time_sec_flash_t : f32 = 0.0
+
+points_l : i32 = 0
+points_r : i32 = 0
+points_l_flash_t : f32 = 0.0
+points_r_flash_t : f32 = 0.0
+
+font_size_base :: 40
+font_size_max  :: 60
+font_size_t : f32 = 0.0 // Maybe unused
+
+update_and_draw_ui :: proc(delta_time : f32) {
+    full_window_y := raylib.GetScreenHeight()
+    half_window_x := raylib.GetScreenWidth() / 2
+
+    /* Determine font size */
+    if font_size_t > 0.0 {
+        font_size_t -= 1.0 * delta_time
+    } else {
+        font_size_t = 0.0
+    }
+    font_size : i32 = font_size_base + cast(i32)(font_size_t * cast(f32)(font_size_max - font_size_base))
+
+    /* Draw dividing line */ {
+        y_top  := font_size
+        y_size := full_window_y - font_size
+        raylib.DrawLine(half_window_x, y_top, half_window_x, y_size, raylib.Color{128, 128, 128, 255})
+    }
+
+    /* Update text flash timers */ {
+        update_flash_timer :: proc(delta_time : f32, timer : ^f32) {
+            flash_speed :: 1.5
+            if timer^ > 0.0 {
+                timer^ -= flash_speed * delta_time
+            } else {
+                timer^ = 0.0
+            }
+        }
+
+        update_flash_timer(delta_time, &points_l_flash_t)
+        update_flash_timer(delta_time, &points_r_flash_t)
+        update_flash_timer(delta_time, &game_time_sec_flash_t)
+        update_flash_timer(delta_time, &game_time_min_flash_t)
+    }
+
+    padding_x          :: 8
+    text_color_a_base  :: 48
+    text_color_a_flash :: 255
+
+    get_text_color :: proc(a : u8) -> raylib.Color {
+        return { 0xFF, 0xFF, 0xFF, a }
+    }
+
+    /* Draw points for left player */ {
+        text_color := get_text_color(text_color_a_base + u8(points_l_flash_t * f32(text_color_a_flash - text_color_a_base)))
+
+        str_points_l := fmt.ctprintf("%v", points_l)
+        str_points_l_w := raylib.MeasureText(str_points_l, font_size)
+        raylib.DrawText(str_points_l, half_window_x - str_points_l_w - padding_x, 0, font_size, text_color)
+    }
+
+    /* Draw points for right player */ {
+        text_color := get_text_color(text_color_a_base + u8(points_r_flash_t * f32(text_color_a_flash - text_color_a_base)))
+
+        str_points_r := fmt.ctprintf("%v", points_r)
+        str_points_r_w := raylib.MeasureText(str_points_r, font_size)
+        raylib.DrawText(str_points_r, half_window_x + padding_x, 0, font_size, text_color)
+    }
+
+    /* Draw game time */ {
+        text_y_bottom := full_window_y - font_size
+
+        text_color     := get_text_color(text_color_a_base + u8(0.0 * f32(text_color_a_flash - text_color_a_base)))
+        text_color_min := get_text_color(text_color_a_base + u8(game_time_min_flash_t * f32(text_color_a_flash - text_color_a_base)))
+        text_color_sec := get_text_color(text_color_a_base + u8(game_time_sec_flash_t * f32(text_color_a_flash - text_color_a_base)))
+
+        /* Minutes */
+        str_game_time_min   := fmt.ctprintf("%02d", game_time_min)
+        str_game_time_min_w := raylib.MeasureText(str_game_time_min, font_size)
+        raylib.DrawText(str_game_time_min, half_window_x - str_game_time_min_w - padding_x, text_y_bottom, font_size, text_color_min)
+
+        /* Seconds */
+        str_game_time_sec   := fmt.ctprintf("%02d", cast(i32)math.floor(game_time_sec))
+        str_game_time_sec_w := raylib.MeasureText(str_game_time_sec, font_size)
+        raylib.DrawText(str_game_time_sec, half_window_x + padding_x, text_y_bottom, font_size, text_color_sec)
+
+        /* : */
+        raylib.DrawText(":", half_window_x - raylib.MeasureText(":", font_size) / 2, text_y_bottom, font_size, text_color)
+    }
+
+    if DEBUG_DRAW {
+        raylib.DrawFPS(0, full_window_y - 16)
     }
 }
 
@@ -417,21 +547,34 @@ main :: proc() {
 
     background_color : raylib.Color = { 32, 32, 32, 255 }
 
-    /* Add ball */ 
-    num_balls := 3338
-    for i := 0; i < num_balls; i += 1 {
+    /* Add ball(s) */ 
+    if false {
+        num_balls := 3338
+        for i := 0; i < num_balls; i += 1 {
+            ball : Ball;
+            ball.size.x = 16.0
+            ball.size.y = 16.0
+            ball.pos.x  = cast(f32)raylib.GetScreenWidth()  * 0.5 - ball.size.x * 0.5
+            ball.pos.y  = cast(f32)raylib.GetScreenHeight() * 0.5 - ball.size.y * 0.5
+            angle := cast(f32)i * ((PI * 2.0) / cast(f32)num_balls)
+            ball.dir.x  = math.sin(PI * 0.5 + angle)
+            ball.dir.y  = math.cos(PI * 0.5 + angle)
+            ball.speed  = 356.0
+            ball.speed_mult = 1.0
+            ball.color  = (raylib.Color){ 255, 255, 255, 255 }
+    
+            append_elem(&balls, ball)
+        }
+    } else {
         ball : Ball;
         ball.size.x = 16.0
         ball.size.y = 16.0
         ball.pos.x  = cast(f32)raylib.GetScreenWidth()  * 0.5 - ball.size.x * 0.5
         ball.pos.y  = cast(f32)raylib.GetScreenHeight() * 0.5 - ball.size.y * 0.5
-        angle := cast(f32)i * ((PI * 2.0) / cast(f32)num_balls)
-        ball.dir.x  = math.sin(PI * 0.5 + angle)
-        ball.dir.y  = math.cos(PI * 0.5 + angle)
+        ball.dir    = vec2{ 1.0, 0.0 }
         ball.speed  = 356.0
         ball.speed_mult = 1.0
         ball.color  = (raylib.Color){ 255, 255, 255, 255 }
-
         append_elem(&balls, ball)
     }
 
@@ -467,34 +610,56 @@ main :: proc() {
 
     for !raylib.WindowShouldClose() {
         raylib.PollInputEvents()
-
         delta_time := raylib.GetFrameTime()
 
-        if raylib.IsKeyDown(raylib.KeyboardKey.LEFT_CONTROL) { delta_time *= 0.1 }
+        last_game_time_min : i32 = game_time_min
+        last_game_time_sec : i32 = cast(i32)math.floor(game_time_sec)
 
-        if raylib.IsKeyDown(raylib.KeyboardKey.SPACE) {
-            if paddle_l.special_state == .NONE {
-                paddle_l.special_state = .SPECIAL
-                paddle_l.special_t  = 0.0
-            }
+        /* Update game time */
+        game_time_sec += delta_time * 100.0
+        if game_time_sec >= 60.0 {
+            game_time_min += 1
+            game_time_sec -= 60.0
         }
 
-        if raylib.IsKeyDown(raylib.KeyboardKey.HOME) {
-            if paddle_r.special_state == .NONE {
-                paddle_r.special_state = .SPECIAL
-                paddle_r.special_t  = 0.0
-            }
+        /* Set ui flash timers */
+        if last_game_time_min != game_time_min {
+            game_time_min_flash_t = 1.0
+        } else if last_game_time_sec != cast(i32)math.floor(game_time_sec) {
+            game_time_sec_flash_t = 1.0
+
+            theta : f32 = rand.float32() * PI * 2.0
+
+            ball : Ball;
+            ball.size.x = 16.0
+            ball.size.y = 16.0
+            ball.pos.x  = cast(f32)raylib.GetScreenWidth()  * 0.5 - ball.size.x * 0.5
+            ball.pos.y  = cast(f32)raylib.GetScreenHeight() * 0.5 - ball.size.y * 0.5
+            ball.dir    = vec2{ math.sin(theta), math.cos(theta) }
+            ball.speed  = 356.0
+            ball.speed_mult = 1.0
+            ball.color  = (raylib.Color){ 255, 255, 255, 255 }
+            append_elem(&balls, ball)
         }
 
-        move_dir   : i32 = 0
-        r_move_dir : i32 = 0
-        if raylib.IsKeyDown(raylib.KeyboardKey.UP)   { move_dir -= 1 }
-        if raylib.IsKeyDown(raylib.KeyboardKey.DOWN) { move_dir += 1 }
-        if raylib.IsKeyDown(raylib.KeyboardKey.PAGE_UP)   { r_move_dir -= 1 }
-        if raylib.IsKeyDown(raylib.KeyboardKey.PAGE_DOWN) { r_move_dir += 1 }
+        if DEBUG_DRAW {
+            if raylib.IsKeyDown(raylib.KeyboardKey.LEFT_CONTROL) { delta_time *= 0.1 }
+        }
 
-        update_paddle(&paddle_l, move_dir,   delta_time)
-        update_paddle(&paddle_r, r_move_dir, delta_time)
+        /* Update paddles */ {
+            l_binds : PlayerKeyBinds
+            l_binds.move_up      = .UP
+            l_binds.move_down    = .DOWN
+            l_binds.special_move = .SPACE
+
+            r_binds : PlayerKeyBinds
+            r_binds.move_up      = .PAGE_UP
+            r_binds.move_down    = .PAGE_DOWN
+            r_binds.special_move = .HOME
+
+            update_paddle(&paddle_l, l_binds, delta_time)
+            update_paddle(&paddle_r, r_binds, delta_time)
+        }
 
         for &ball in balls {
             update_ball(&ball, delta_time)
@@ -517,52 +682,9 @@ main :: proc() {
         draw_paddle(paddle_l)
         draw_paddle(paddle_r)
 
+        update_and_draw_ui(delta_time)
 
-        full_window_y := raylib.GetScreenHeight()
-        half_window_x := raylib.GetScreenWidth() / 2
-        raylib.DrawLine(half_window_x, 0, half_window_x, full_window_y, raylib.Color{128, 128, 128, 255})
-
-        raylib.DrawFPS(0, full_window_y - 16)
-    
-        font_size  : i32 = 40
-        x_padding  : i32 = 8
-
-        text_color_a_base  : u8 = 48
-        text_color_a_flash : u8 = 255
-        get_text_color :: proc(a : u8) -> raylib.Color {
-            return { 0xFF, 0xFF, 0xFF, a }
-        }
-
-        flash_speed :: 2.0
-
-        // @check Need free memory?
-        /* Draw points for left player */ {
-            if points_l_flash_t > 0.0 {
-                points_l_flash_t -= delta_time * flash_speed
-            }
-
-            text_color := get_text_color(text_color_a_base + u8(points_l_flash_t * f32(text_color_a_flash - text_color_a_base)))
-
-            str_points_l := fmt.ctprintf("%v", points_l)
-            str_points_l_w := raylib.MeasureText(str_points_l, font_size)
-            raylib.DrawText(str_points_l, half_window_x - str_points_l_w - x_padding, 0, font_size, text_color)
-        }
-
-        /* Draw points for right player */ {
-            if points_r_flash_t > 0.0 {
-                points_r_flash_t -= delta_time * flash_speed
-            }
-
-            text_color := get_text_color(text_color_a_base + u8(points_r_flash_t * f32(text_color_a_flash - text_color_a_base)))
-
-            str_points_r := fmt.ctprintf("%v", points_r)
-            str_points_r_w := raylib.MeasureText(str_points_r, font_size)
-            raylib.DrawText(str_points_r, half_window_x + x_padding, 0, font_size, text_color)
-        }
-
-        // raylib.DrawText("POINTS", half_window_x + 4, 0, 20, { 255, 255 ,255 ,255 })
-        // raylib.DrawText("POINTS", half_window_x - 133, 0, 20, { 255, 255 ,255 ,255 })
-
+        
         raylib.EndMode2D()
         raylib.EndDrawing()
     }
