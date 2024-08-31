@@ -56,16 +56,16 @@ dot :: proc(a, b : vec2) -> f32 {
 	return a.x * b.x + a.y * b.y
 }
 
-len_sq :: proc(a : vec2) -> f32 {
+length_sq :: proc(a : vec2) -> f32 {
 	return dot(a, a)
 }
 
-len :: proc(a : vec2) -> f32 {
-	return math.sqrt(len_sq(a))
+length :: proc(a : vec2) -> f32 {
+	return math.sqrt(length_sq(a))
 }
 
 norm :: proc(a : vec2) -> vec2 {
-	a_len := len(a)
+	a_len := length(a)
 	return vec2{
 		a.x / a_len,
 		a.y / a_len
