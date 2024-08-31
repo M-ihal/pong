@@ -9,7 +9,7 @@ init_window_size_x : i32 = 1920 / 2
 init_window_size_y : i32 = 1080 / 2
 init_window_title  : cstring = "Pong"
 
-DEBUG_DRAW :: false
+DEBUG_DRAW :: true
 
 get_game_width :: proc() -> i32 {
     return 960
@@ -17,6 +17,11 @@ get_game_width :: proc() -> i32 {
 
 get_game_height :: proc() -> i32 {
     return 540
+}
+
+EGameState :: enum {
+    MAIN_MENU,
+    GAMEPLAY
 }
 
 Ball :: struct {
@@ -162,6 +167,7 @@ get_paddle_collider :: proc(paddle : Paddle) -> (vec2, vec2) {
     return pos, size
 }
 
+def_bg_color    := raylib.Color{ 32, 32, 32, 255 }
 def_ball_speed  : f32 = 256.0
 def_ball_size   := vec2{ 16.0, 16.0 }
 def_paddle_size := vec2{ 8.0, 128.0 }
@@ -170,6 +176,8 @@ balls    : [dynamic] Ball
 paddle_l : Paddle
 paddle_r : Paddle
 specials : [ESpecialType._COUNT] Special
+
+game_state : EGameState = .MAIN_MENU
 
 add_points_l :: proc(amount : i32 = 1) {
     points_l += amount
@@ -621,14 +629,192 @@ update_and_draw_ui :: proc(delta_time : f32) {
         /* R paddle */ {
             p_pos, p_size := get_paddle_collider(paddle_r)
 
-            
-
             strl := fmt.ctprintf("%f", p_pos.x + p_size.x)
             raylib.DrawText(strl, auto_cast(window_right - paddle_offset - cast(f32)raylib.MeasureText(strl, debug_font_size)), auto_cast paddle_r.pos.y - debug_font_size, debug_font_size, debug_text_color)
 
             strr := fmt.ctprintf("%f", p_pos.x)
             raylib.DrawText(strr, auto_cast(window_right - paddle_offset - cast(f32)raylib.MeasureText(strr, debug_font_size)), auto_cast(paddle_r.pos.y + paddle_r.size.y), debug_font_size, debug_text_color)
         }
+    }
+}
+
+update_and_draw_game :: proc(delta_time : f32) {
+    last_game_time_min : i32 = game_time_min
+    last_game_time_sec : i32 = cast(i32)math.floor(game_time_sec)
+
+    /* Update game time */
+    game_time_sec += delta_time
+    if game_time_sec >= 60.0 {
+        game_time_min += 1
+        game_time_sec -= 60.0
+    }
+
+    /* Set ui flash timers */
+    if last_game_time_min != game_time_min {
+        game_time_min_flash_t = 1.0
+
+        /* @TEMP */
+        new_ball := add_ball()
+        theta : f32 = rand.float32() * PI * 2.0
+        new_ball.dir = vec2{ math.sin(theta), math.cos(theta) }
+
+    } else if last_game_time_sec != cast(i32)math.floor(game_time_sec) {
+        game_time_sec_flash_t = 1.0
+    }
+
+    /* Update paddles */ {
+        l_binds : PlayerKeyBinds
+        l_binds.move_up      = .UP
+        l_binds.move_down    = .DOWN
+        l_binds.special_move = .SPACE
+
+        r_binds : PlayerKeyBinds
+        r_binds.move_up      = .PAGE_UP
+        r_binds.move_down    = .PAGE_DOWN
+        r_binds.special_move = .HOME
+
+        update_paddle(&paddle_l, l_binds, delta_time)
+        update_paddle(&paddle_r, r_binds, delta_time)
+    }
+
+    for &ball in balls {
+        update_ball(&ball, delta_time)
+    }
+
+    /* Draw game */ {
+        camera : raylib.Camera2D
+        camera.zoom = cast(f32)raylib.GetScreenWidth() / cast(f32)get_game_width() // @HACK
+    
+        raylib.ClearBackground(def_bg_color)
+        raylib.BeginDrawing()
+        raylib.BeginMode2D(camera)
+    
+        for &ball in balls {
+            draw_ball(ball)
+        }
+    
+        draw_paddle(paddle_l)
+        draw_paddle(paddle_r)
+    
+        update_and_draw_ui(delta_time)
+        
+        raylib.EndMode2D()
+        raylib.EndDrawing()
+    }
+}
+
+menu_logo_font_size :: 60
+menu_logo_title :: "Pongg"
+menu_logo_speed :: 128.0 + 64.0
+menu_logo_color :: raylib.Color{ 255, 255, 255, 64 }
+menu_logo_pos : vec2
+menu_logo_dir : vec2 = { 1, 1 }
+
+// @hack Because can't use Pressed in update_and_draw...
+menu_apply_selected_opt : bool = false
+
+menu_opt_selected_idx := 0
+
+menu_options : []cstring = {
+    "START GAME",
+    "QUIT"
+}
+
+change_menu_selection :: proc(delta : int) {
+    assert(delta == -1 || delta == 1)
+
+    menu_opt_selected_idx += delta
+
+    if menu_opt_selected_idx < 0 {
+        menu_opt_selected_idx = len(menu_options) - 1
+    } else if menu_opt_selected_idx >= len(menu_options) {
+        menu_opt_selected_idx = 0
+    }
+}
+
+update_and_draw_menu :: proc(delta_time : f32) {
+    menu_logo_pos = add(menu_logo_pos, mult_f(menu_logo_dir, delta_time * menu_logo_speed))
+    menu_logo_size : vec2 = { auto_cast raylib.MeasureText(menu_logo_title, menu_logo_font_size), auto_cast menu_logo_font_size }
+
+    screen_w := get_game_width()
+    screen_h := get_game_height()
+
+    /* Check for collision with sides */ {
+        region_r := cast(f32)get_game_width()
+        region_b := cast(f32)get_game_height()
+        region_x := cast(f32)0
+        region_y := cast(f32)0
+
+        if menu_logo_pos.x <= region_x {
+            menu_logo_pos.x = region_x
+            menu_logo_dir.x *= -1.0
+        }
+    
+        if menu_logo_pos.y <= region_y {
+            menu_logo_pos.y = region_y
+            menu_logo_dir.y *= -1.0
+        }
+    
+        if (menu_logo_pos.x + menu_logo_size.x) >= region_r {
+            menu_logo_pos.x = region_r - menu_logo_size.x
+            menu_logo_dir.x *= -1
+        }
+    
+        if (menu_logo_pos.y + menu_logo_size.y) >= region_b {
+            menu_logo_pos.y = region_b - menu_logo_size.y
+            menu_logo_dir.y *= -1
+        }
+    }
+
+    if menu_apply_selected_opt {
+        switch menu_opt_selected_idx {
+            case 0: {
+                game_state = .GAMEPLAY
+            }
+
+            case 1: {
+                raylib.CloseWindow()
+                return
+            }
+        }
+
+        menu_apply_selected_opt = false
+    }
+
+    /* Draw menu */ {
+        camera : raylib.Camera2D
+        camera.zoom = 1.0 // @todo
+    
+        raylib.ClearBackground(def_bg_color)
+        raylib.BeginDrawing()
+        raylib.BeginMode2D(camera)
+    
+        center_x := get_game_width() / 2
+
+        
+        menu_text_color : raylib.Color = { 255, 255, 255, 255 }
+
+        raylib.DrawText(menu_logo_title, auto_cast menu_logo_pos.x, auto_cast menu_logo_pos.y, menu_logo_font_size, menu_logo_color)
+        
+        
+
+        opt_font_size  :: 30
+        opt_text_color :: raylib.Color{ 255, 255, 255, 255 }
+
+        for &option, idx in menu_options {
+            text_color := opt_text_color
+            if menu_opt_selected_idx == idx {
+                text_color = { 255, 255, 0, 255 }
+            }
+            raylib.DrawText(option, 0, auto_cast idx * opt_font_size + 32, opt_font_size, text_color)
+        }
+
+        if DEBUG_DRAW {
+            raylib.DrawFPS(0, screen_h - 16)
+        }
+
+        raylib.EndMode2D()
+        raylib.EndDrawing()
     }
 }
 
@@ -643,38 +829,8 @@ main :: proc() {
 
     init_specials()
 
-    background_color : raylib.Color = { 32, 32, 32, 255 }
-
     /* Add ball(s) */ 
-    if false {
-        num_balls := 3338
-        for i := 0; i < num_balls; i += 1 {
-            ball : Ball;
-            ball.size.x = 16.0
-            ball.size.y = 16.0
-            ball.pos.x  = cast(f32)get_game_width()  * 0.5 - ball.size.x * 0.5
-            ball.pos.y  = cast(f32)get_game_height() * 0.5 - ball.size.y * 0.5
-            angle := cast(f32)i * ((PI * 2.0) / cast(f32)num_balls)
-            ball.dir.x  = math.sin(PI * 0.5 + angle)
-            ball.dir.y  = math.cos(PI * 0.5 + angle)
-            ball.speed  = 356.0
-            ball.speed_mult = 1.0
-            ball.color  = (raylib.Color){ 255, 255, 255, 255 }
-    
-            append_elem(&balls, ball)
-        }
-    } else {
-        ball : Ball;
-        ball.size.x = 16.0
-        ball.size.y = 16.0
-        ball.pos.x  = cast(f32)get_game_width()  * 0.5 - ball.size.x * 0.5
-        ball.pos.y  = cast(f32)get_game_height() * 0.5 - ball.size.y * 0.5
-        ball.dir    = vec2{ 1.0, 0.0 }
-        ball.speed  = 356.0
-        ball.speed_mult = 1.0
-        ball.color  = (raylib.Color){ 255, 255, 255, 255 }
-        append_elem(&balls, ball)
-    }
+    add_ball()
 
     /* Init left paddle */ {
         p := &paddle_l
@@ -684,7 +840,7 @@ main :: proc() {
         p.speed = 512
         p.side  = .LEFT
         p.color = { 177, 77, 127, 255 }
-        p.special_type  = .PUNCH
+        p.special_type  = .SHOOT
         p.special_state = .NONE
         p.special_t     = 0.0
     }
@@ -699,81 +855,39 @@ main :: proc() {
         p.size_mult = vec2{ 1.0, 1.0 }
         p.side  = .RIGHT
         p.color = { 111, 133, 187, 255 }
+        p.special_type  = .PUNCH
         p.special_state = .NONE
         p.special_t     = 0.0
-        p.special_type  = .ENLARGE
     }
 
     for !raylib.WindowShouldClose() {
+
+        /* IsKeyPressed before polling events, idk why @check */ {
+            if raylib.IsKeyPressed(.F1) { game_state = .MAIN_MENU }
+            if raylib.IsKeyPressed(.F2) { game_state = .GAMEPLAY }
+
+            // @todo @move
+            if game_state == .MAIN_MENU {
+                if raylib.IsKeyPressed(.DOWN)  { change_menu_selection(-1) }
+                if raylib.IsKeyPressed(.UP)    { change_menu_selection(+1) }
+                if raylib.IsKeyPressed(.ENTER) { menu_apply_selected_opt = true }
+            }
+        }
         raylib.PollInputEvents()
+
         delta_time := raylib.GetFrameTime()
 
-        last_game_time_min : i32 = game_time_min
-        last_game_time_sec : i32 = cast(i32)math.floor(game_time_sec)
-
-        /* Update game time */
-        game_time_sec += delta_time
-        if game_time_sec >= 60.0 {
-            game_time_min += 1
-            game_time_sec -= 60.0
-        }
-
-        /* Set ui flash timers */
-        if last_game_time_min != game_time_min {
-            game_time_min_flash_t = 1.0
-
-            /* @TEMP */
-            new_ball := add_ball()
-            theta : f32 = rand.float32() * PI * 2.0
-            new_ball.dir = vec2{ math.sin(theta), math.cos(theta) }
-
-        } else if last_game_time_sec != cast(i32)math.floor(game_time_sec) {
-            game_time_sec_flash_t = 1.0
-        }
-
-        if DEBUG_DRAW {
-            if raylib.IsKeyDown(raylib.KeyboardKey.LEFT_CONTROL) { delta_time *= 0.1 }
-        }
-
-        /* Update paddles */ {
-            l_binds : PlayerKeyBinds
-            l_binds.move_up      = .UP
-            l_binds.move_down    = .DOWN
-            l_binds.special_move = .SPACE
-
-            r_binds : PlayerKeyBinds
-            r_binds.move_up      = .PAGE_UP
-            r_binds.move_down    = .PAGE_DOWN
-            r_binds.special_move = .HOME
-
-            update_paddle(&paddle_l, l_binds, delta_time)
-            update_paddle(&paddle_r, r_binds, delta_time)
-        }
-
-        for &ball in balls {
-            update_ball(&ball, delta_time)
-        }
-
-        camera : raylib.Camera2D
-        camera.target = { }
-        camera.zoom = cast(f32)raylib.GetScreenWidth() / cast(f32)get_game_width() // @HACK
-
-
-        raylib.ClearBackground(background_color)
-        raylib.BeginDrawing()
-        raylib.BeginMode2D(camera)
-
-        for &ball in balls {
-            draw_ball(ball)
-        }
-
-        draw_paddle(paddle_l)
-        draw_paddle(paddle_r)
-
-        update_and_draw_ui(delta_time)
-
+        if raylib.IsKeyDown(raylib.KeyboardKey.LEFT_CONTROL) { delta_time *= 0.1 }
         
-        raylib.EndMode2D()
-        raylib.EndDrawing()
+
+        switch game_state {
+            case .MAIN_MENU: {
+                update_and_draw_menu(delta_time)
+            }
+            case .GAMEPLAY: {
+                update_and_draw_game(delta_time)
+            }
+        }
+
     }
 }
