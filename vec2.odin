@@ -71,3 +71,7 @@ norm :: proc(a : vec2) -> vec2 {
 		a.y / a_len
 	}
 }
+
+dist :: proc(a, b : vec2) -> f32 {
+	return length(sub(a, b))
+}
