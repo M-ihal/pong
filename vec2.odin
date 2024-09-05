@@ -8,6 +8,10 @@ vec2 :: struct {
 	x, y : f32
 }
 
+vec2_make :: proc(v : f32) -> vec2 {
+	return vec2{ v, v }
+}
+
 square :: proc(a : vec2) -> vec2 {
 	return mult(a, a)
 }
