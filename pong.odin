@@ -45,12 +45,14 @@ EPaddleSide :: enum {
 
 EMenuOption :: enum {
     START_GAME,
+    TOGGLE_FC,
     DEBUG_MODE,
     QUIT
 }
 
 menu_options :: [EMenuOption]cstring {
     .START_GAME = "START",
+    .TOGGLE_FC  = "TOGGLE FULLSCREEN",
     .DEBUG_MODE = "DEBUG",
     .QUIT       = "QUIT"
 }
@@ -76,6 +78,7 @@ Special :: struct {
     special_size_func         : ESpecialFunc,
     special_move_func_recover : ESpecialFunc,
     special_size_func_recover : ESpecialFunc,
+    special_cooldown_time     : f32,
 }
 
 Paddle :: struct {
@@ -91,7 +94,8 @@ Paddle :: struct {
     special_type   : ESpecialType,
     special_state  : ESpecialState,
     special_t      : f32,
-    special_wait_t : f32
+    special_wait_t : f32,
+    special_cooldown_t : f32,
 }
 
 PlayerKeyBinds :: struct {
@@ -99,16 +103,6 @@ PlayerKeyBinds :: struct {
     move_down    : raylib.KeyboardKey,
     special_move : raylib.KeyboardKey,
 }
-
-
-GAME_WIDTH      :: i32(960)
-GAME_HEIGHT     :: i32(540)
-FONT_SIZE_BASE  :: i32(40)
-FONT_SIZE_MAX   :: i32(60)
-DEF_BALL_SPEED  :: 256.0
-DEF_BALL_SIZE   :: vec2{ 16.0, 16.0 }
-DEF_PADDLE_SIZE :: vec2{ 8.0, 128.0 }
-PADDLE_OFFSET   :: 16.0
 
 GameState :: struct {
     balls                 : [dynamic]Ball,
@@ -122,17 +116,9 @@ GameState :: struct {
     points_r_flash_t      : f32,
     game_time_min_flash_t : f32,
     game_time_sec_flash_t : f32,
-    font_size_t           : f32 /* @unused */
+    game_time_elapsed     : f32,
+    font_size_t           : f32, /* @unused */
 }
-
-MENU_LOGO_FONT_SIZE :: 40
-MENU_LOGO_TITLE     :: "Pongg"
-MENU_LOGO_SPEED     :: 96.0
-MENU_LOGO_COLOR     :: raylib.Color{ 255, 255, 255, 16 }
-MENU_OPT_RADIUS     :: 116.0
-MENU_OPT_FONT_SIZE  :: 30
-MENU_OPT_COLOR      :: raylib.Color{ 255, 255, 255, 64 }
-MENU_OPT_COLOR_HOT  :: raylib.Color{ 255, 255, 255, 192 }
 
 MenuState :: struct {
     menu_logo_pos           : vec2,
@@ -143,8 +129,6 @@ MenuState :: struct {
     menu_opt_angle_offset   : f32,
 }
 
-TRANSITION_TIME :: 1.3
-
 TransitionState :: struct {
     transition_t      : f32,
     transition_target : EState
@@ -154,10 +138,32 @@ TransitionState :: struct {
     --- Globals ---
 */
 
+GAME_WIDTH           :: i32(960)
+GAME_HEIGHT          :: i32(540)
+GAME_FONT_SIZE       :: i32(40)
+GAME_FONT_SIZE_MAX   :: i32(60)
+GAME_DEF_BALL_SPEED  :: 480.0
+GAME_DEF_BALL_SIZE   :: vec2{ 16.0, 16.0 }
+GAME_DEF_PADDLE_SIZE :: vec2{ 8.0, 128.0 }
+GAME_PADDLE_OFFSET   :: 16.0
+GAME_MATCH_TIME_MIN  :: 5
+GAME_MATCH_TIME_SEC  :: 0.95
+
+MENU_LOGO_FONT_SIZE :: 40
+MENU_LOGO_TITLE     :: "Pongg"
+MENU_LOGO_SPEED     :: 96.0
+MENU_LOGO_COLOR     :: raylib.Color{ 255, 255, 255, 16 }
+MENU_OPT_RADIUS     :: 170.0 // 116.0
+MENU_OPT_FONT_SIZE  :: 30
+MENU_OPT_COLOR      :: raylib.Color{ 255, 255, 255, 64 }
+MENU_OPT_COLOR_HOT  :: raylib.Color{ 255, 255, 255, 192 }
+
+TRANSITION_TIME :: 1.5
+
 INIT_WINDOW_WIDTH  :: i32(1920 / 2)
 INIT_WINDOW_HEIGHT :: i32(1080 / 2)
 INIT_WINDOW_TITLE  :: cstring("Pong")
-INIT_WINDOW_VSYNC  :: false
+INIT_WINDOW_VSYNC  :: true
 DEF_BG_COLOR       :: raylib.Color{ 32, 32, 32, 255 }
 
 g_state      : EState = .MAIN_MENU
@@ -167,7 +173,8 @@ g_menu       : MenuState
 g_transition : TransitionState
 g_binds_l    : PlayerKeyBinds
 g_binds_r    : PlayerKeyBinds
-g_debug_draw : bool = true
+g_debug_draw : bool = false
+g_close_window : bool = false
 
 /*
     --- Procedures ---
@@ -175,8 +182,8 @@ g_debug_draw : bool = true
 
 setup_paddle_l :: proc() {
     p := &g_game.paddle_l
-    p.pos        = vec2{ PADDLE_OFFSET, f32(GAME_HEIGHT) * 0.5 - DEF_PADDLE_SIZE.y * 0.5 }
-    p.size       = DEF_PADDLE_SIZE
+    p.pos        = vec2{ GAME_PADDLE_OFFSET, f32(GAME_HEIGHT) * 0.5 - GAME_DEF_PADDLE_SIZE.y * 0.5 }
+    p.size       = GAME_DEF_PADDLE_SIZE
     p.size_mult  = vec2{ 1.0, 1.0 }
     p.speed      = 512
     p.side       = .LEFT
@@ -184,12 +191,13 @@ setup_paddle_l :: proc() {
     p.special_type  = .SHOOT
     p.special_state = .NONE
     p.special_t     = 0.0
+    p.special_cooldown_t = 0.0
 }
 
 setup_paddle_r :: proc() {
     p := &g_game.paddle_r
-    p.size  = DEF_PADDLE_SIZE
-    p.pos   = vec2{ f32(GAME_WIDTH) - PADDLE_OFFSET - p.size.x, f32(GAME_HEIGHT) * 0.5 - DEF_PADDLE_SIZE.y * 0.5 }
+    p.size  = GAME_DEF_PADDLE_SIZE
+    p.pos   = vec2{ f32(GAME_WIDTH) - GAME_PADDLE_OFFSET - p.size.x, f32(GAME_HEIGHT) * 0.5 - GAME_DEF_PADDLE_SIZE.y * 0.5 }
     p.speed = 723
     p.size_mult = vec2{ 1.0, 1.0 }
     p.side  = .RIGHT
@@ -197,14 +205,15 @@ setup_paddle_r :: proc() {
     p.special_type  = .PUNCH
     p.special_state = .NONE
     p.special_t     = 0.0
+    p.special_cooldown_t = 0.0
 }
 
 add_ball :: proc() -> ^Ball {
     ball : Ball
-    ball.size = DEF_BALL_SIZE
+    ball.size = GAME_DEF_BALL_SIZE
     ball.pos  = vec2{ f32(GAME_WIDTH) / 2.0 - ball.size.x / 2.0, f32(GAME_HEIGHT) / 2.0 - ball.size.y / 2.0 }
-    ball.dir  = vec2{ 1.0, 0.0 }
-    ball.speed = DEF_BALL_SPEED
+    ball.dir  = (rand.uint32() % 2 == 0) ? vec2{ 1.0, 0.0 } : vec2{ -1.0, 0.0 }
+    ball.speed = GAME_DEF_BALL_SPEED
     ball.speed_mult = 1.0
     ball.color = { 255, 255, 255, 255 }
     append_elem(&g_game.balls, ball)
@@ -217,12 +226,13 @@ init_game :: proc() {
     setup_paddle_r()
     g_game.points_l      = 0
     g_game.points_r      = 0
-    g_game.game_time_min = 0
-    g_game.game_time_sec = 0
+    g_game.game_time_min = GAME_MATCH_TIME_MIN
+    g_game.game_time_sec = GAME_MATCH_TIME_SEC
     g_game.points_l_flash_t      = 0.0
     g_game.points_r_flash_t      = 0.0
     g_game.game_time_min_flash_t = 0.0
     g_game.game_time_sec_flash_t = 0.0
+    g_game.game_time_elapsed     = 0.0
     g_game.font_size_t           = 0.0
 }
 
@@ -286,6 +296,7 @@ init_specials :: proc() {
         sp.special_size_func      = .LINEAR        
         sp.special_move_func_recover = .SQUARE
         sp.special_size_func_recover = .LINEAR
+        sp.special_cooldown_time = 0.5
     }
 
     /* PUNCH */ {
@@ -301,6 +312,7 @@ init_specials :: proc() {
         sp.special_size_func      = .EASE_OUT_ELASTIC
         sp.special_move_func_recover = .LINEAR
         sp.special_size_func_recover = .LINEAR
+        sp.special_cooldown_time = 1.5
     }
 
     /* ENLARGE */ {
@@ -316,6 +328,7 @@ init_specials :: proc() {
         sp.special_size_func      = .EASE_OUT_CIRC
         sp.special_move_func_recover = .EASE_IN_CIRC
         sp.special_size_func_recover = .EASE_OUT_CIRC
+        sp.special_cooldown_time = 0.5
     }
 }
 
@@ -454,6 +467,12 @@ draw_paddle :: proc(paddle : Paddle) {
         paddle_color.a = 128
     }
 
+    /* Do blinking to indicate cooldown */
+    if paddle.special_cooldown_t > 0.0 {
+        cosine := math.cos(g_game.game_time_elapsed * 10.0) * 0.5 + 0.5
+        paddle_color.a = 32 + u8(cosine * 164.0)
+    }
+
     draw_pos, draw_size := get_paddle_collider(paddle)
     raylib.DrawRectangle(i32(draw_pos.x), i32(draw_pos.y), i32(draw_size.x), i32(draw_size.y), paddle_color)
 
@@ -468,6 +487,11 @@ update_paddle_special :: proc(paddle : ^Paddle, delta_time : f32) {
 
     switch paddle.special_state {
         case .NONE: {
+            /* Update special cooldown */
+            if paddle.special_cooldown_t > 0.0 {
+                paddle.special_cooldown_t -= delta_time
+            }
+
             for &ball in g_game.balls {
                 ball_x_dir := i32(math.sign(ball.dir.x))
         
@@ -568,6 +592,7 @@ update_paddle_special :: proc(paddle : ^Paddle, delta_time : f32) {
             if paddle.special_t <= 0.0 {
                 paddle.special_state = .NONE
                 paddle.special_t = 0.0
+                paddle.special_cooldown_t = special.special_cooldown_time
             }
         }
     }
@@ -581,17 +606,17 @@ update_paddle_special :: proc(paddle : ^Paddle, delta_time : f32) {
     /* Update paddle x pos */
     if paddle.special_state == .NONE {
         if paddle.side == .LEFT {
-            paddle.pos.x = PADDLE_OFFSET
+            paddle.pos.x = GAME_PADDLE_OFFSET
         } else {
-            paddle.pos.x = f32(GAME_WIDTH) - PADDLE_OFFSET - paddle.size.x
+            paddle.pos.x = f32(GAME_WIDTH) - GAME_PADDLE_OFFSET - paddle.size.x
         }
     } else {
         move_perc_t := special_func(paddle.special_t, move_func)
 
         if paddle.side == .LEFT {
-            paddle.pos.x = PADDLE_OFFSET + special.special_dist * move_perc_t
+            paddle.pos.x = GAME_PADDLE_OFFSET + special.special_dist * move_perc_t
         } else {
-            paddle.pos.x = f32(GAME_WIDTH) - PADDLE_OFFSET - paddle.size.x - special.special_dist * move_perc_t
+            paddle.pos.x = f32(GAME_WIDTH) - GAME_PADDLE_OFFSET - paddle.size.x - special.special_dist * move_perc_t
         }
     }
 }
@@ -599,7 +624,7 @@ update_paddle_special :: proc(paddle : ^Paddle, delta_time : f32) {
 update_paddle :: proc(paddle : ^Paddle, binds : PlayerKeyBinds, delta_time : f32) {
     /* Special move */
     if raylib.IsKeyDown(binds.special_move) {
-        if paddle.special_state == .NONE {
+        if paddle.special_state == .NONE && paddle.special_cooldown_t <= 0.0 {
             paddle.special_state = .SPECIAL
             paddle.special_t     = 0.0
         }
@@ -613,7 +638,7 @@ update_paddle :: proc(paddle : ^Paddle, binds : PlayerKeyBinds, delta_time : f32
     paddle.pos.y = clamp(paddle.pos.y, 0.0, f32(GAME_HEIGHT) - paddle.size.y)
 
     /* Update special move */
-    NUM_UPDATES    :: 32
+    NUM_UPDATES    :: 8
     one_delta_time := delta_time / f32(NUM_UPDATES)
 
     for idx in 1..=NUM_UPDATES {
@@ -630,7 +655,7 @@ update_and_draw_ui :: proc(delta_time : f32) {
     } else {
         g_game.font_size_t = 0.0
     }
-    font_size : i32 = FONT_SIZE_BASE + cast(i32)(g_game.font_size_t * cast(f32)(FONT_SIZE_MAX - FONT_SIZE_BASE))
+    font_size : i32 = GAME_FONT_SIZE + cast(i32)(g_game.font_size_t * cast(f32)(GAME_FONT_SIZE_MAX - GAME_FONT_SIZE))
 
     /* Draw dividing line */ {
         y_top  := font_size
@@ -715,49 +740,74 @@ update_and_draw_ui :: proc(delta_time : f32) {
             p_pos, p_size := get_paddle_collider(g_game.paddle_l)
 
             strl := fmt.ctprintf("%f", p_pos.x)
-            raylib.DrawText(strl, PADDLE_OFFSET, i32(g_game.paddle_l.pos.y) - debug_font_size, debug_font_size, debug_text_color)
+            raylib.DrawText(strl, GAME_PADDLE_OFFSET, i32(g_game.paddle_l.pos.y) - debug_font_size, debug_font_size, debug_text_color)
 
             strr := fmt.ctprintf("%f", p_pos.x + p_size.x)
-            raylib.DrawText(strr, PADDLE_OFFSET, i32(g_game.paddle_l.pos.y + g_game.paddle_l.size.y), debug_font_size, debug_text_color)
+            raylib.DrawText(strr, GAME_PADDLE_OFFSET, i32(g_game.paddle_l.pos.y + g_game.paddle_l.size.y), debug_font_size, debug_text_color)
         }
 
         /* R paddle */ {
             p_pos, p_size := get_paddle_collider(g_game.paddle_r)
 
             strl := fmt.ctprintf("%f", p_pos.x + p_size.x)
-            raylib.DrawText(strl, i32(window_right - PADDLE_OFFSET - f32(raylib.MeasureText(strl, debug_font_size))), i32(g_game.paddle_r.pos.y) - debug_font_size, debug_font_size, debug_text_color)
+            raylib.DrawText(strl, i32(window_right - GAME_PADDLE_OFFSET - f32(raylib.MeasureText(strl, debug_font_size))), i32(g_game.paddle_r.pos.y) - debug_font_size, debug_font_size, debug_text_color)
 
             strr := fmt.ctprintf("%f", p_pos.x)
-            raylib.DrawText(strr, i32(window_right - PADDLE_OFFSET - f32(raylib.MeasureText(strr, debug_font_size))), i32(g_game.paddle_r.pos.y + g_game.paddle_r.size.y), debug_font_size, debug_text_color)
+            raylib.DrawText(strr, i32(window_right - GAME_PADDLE_OFFSET - f32(raylib.MeasureText(strr, debug_font_size))), i32(g_game.paddle_r.pos.y + g_game.paddle_r.size.y), debug_font_size, debug_text_color)
         }
     }
 }
 
+game_over :: proc() {
+    change_to_state_transition(.MAIN_MENU)
+}
+
 update_and_draw_game :: proc(delta_time : f32) {
+    g_game.game_time_elapsed += delta_time
+
     last_game_time_min := g_game.game_time_min
     last_game_time_sec := i32(math.floor(g_game.game_time_sec))
 
     /* Update game time */
-    g_game.game_time_sec += delta_time
-    if g_game.game_time_sec >= 60.0 {
-        g_game.game_time_min += 1
-        g_game.game_time_sec -= 60.0
+    g_game.game_time_sec -= delta_time
+    if g_game.game_time_sec <= 0.0 {
+        g_game.game_time_min -= 1
+        g_game.game_time_sec += 60.0
+    }
+
+    now_game_time_sec := i32(math.floor(g_game.game_time_sec))
+
+    if g_game.game_time_min < 0 {
+        game_over()
+        return
     }
 
     /* Set ui flash timers */
     if last_game_time_min != g_game.game_time_min {
         g_game.game_time_min_flash_t = 1.0
-    } else if last_game_time_sec != i32(math.floor(g_game.game_time_sec)) {
+    } 
+    if last_game_time_sec != now_game_time_sec {
         g_game.game_time_sec_flash_t = 1.0
+
+        /* Add new ball every ~30 seconds */
+        if now_game_time_sec == 30 || now_game_time_sec == 0 {
+            add_ball()
+        }
     }
 
-    /* Update paddles */ {
-        update_paddle(&g_game.paddle_l, g_binds_l, delta_time)
-        update_paddle(&g_game.paddle_r, g_binds_r, delta_time)
-    }
 
-    for &ball in g_game.balls {
-        update_ball(&ball, delta_time)
+    /* Divide delta time and do multiple steps to improve accuracy, hacky? */
+    UPDATE_STEPS :: 4
+    update_step_dt := delta_time / f32(UPDATE_STEPS)
+    for step in 0..<4 {
+        /* Update paddles */ {
+            update_paddle(&g_game.paddle_l, g_binds_l, update_step_dt)
+            update_paddle(&g_game.paddle_r, g_binds_r, update_step_dt)
+        }
+
+        for &ball in g_game.balls {
+            update_ball(&ball, update_step_dt)
+        }
     }
 
     /* Draw game */ {
@@ -837,24 +887,28 @@ update_and_draw_menu :: proc(delta_time : f32) {
                 change_to_state_transition(.GAMEPLAY)
             }
 
+            case .TOGGLE_FC: {
+                raylib.ToggleBorderlessWindowed()
+            }
+
             case .DEBUG_MODE: {
                 g_debug_draw = !g_debug_draw
             }
 
             case .QUIT: {
-                raylib.CloseWindow()
+                g_close_window = true
                 return
             }
         }
 
-        // @HACK
+        // eh
         g_menu.menu_apply_selected_opt = false
     }
 
     /* Draw menu */ {
         camera : raylib.Camera2D
         camera.zoom = f32(raylib.GetScreenWidth()) / f32(GAME_WIDTH) // @HACK
-    
+
         raylib.ClearBackground(DEF_BG_COLOR)
         raylib.BeginDrawing()
         raylib.BeginMode2D(camera)
@@ -934,7 +988,8 @@ update_and_draw_transition :: proc(delta_time : f32) {
     center_y := GAME_HEIGHT / 2
 
     t_minus_one_to_one := (g_transition.transition_t / TRANSITION_TIME * 2.0) - 1.0
-    perc := special_func(t_minus_one_to_one, .SQUARE)
+    // perc := special_func(t_minus_one_to_one, .SQRT)
+    perc := square_f(t_minus_one_to_one) * 2.0 * t_minus_one_to_one * (t_minus_one_to_one / 2.0)
     clear_color := DEF_BG_COLOR
     clear_color.x = u8(perc * f32(DEF_BG_COLOR.x))
     clear_color.y = u8(perc * f32(DEF_BG_COLOR.y))
@@ -984,6 +1039,7 @@ main :: proc() {
     if INIT_WINDOW_VSYNC { raylib.SetConfigFlags({ raylib.ConfigFlag.VSYNC_HINT }) }
 
     raylib.InitWindow(INIT_WINDOW_WIDTH, INIT_WINDOW_HEIGHT, INIT_WINDOW_TITLE)
+    raylib.SetExitKey(raylib.KeyboardKey(0))
 
     // @HACK
     if INIT_WINDOW_WIDTH == 1920 {
@@ -1006,14 +1062,16 @@ main :: proc() {
 
     for !raylib.WindowShouldClose() {
         /* IsKeyPressed before polling events, idk why @check */ {
-            if raylib.IsKeyPressed(.F1) { change_to_state_transition(.MAIN_MENU) }
-            if raylib.IsKeyPressed(.F2) { change_to_state_transition(.GAMEPLAY) }
+            if g_state == .GAMEPLAY {
+                if raylib.IsKeyPressed(.ESCAPE) { change_to_state_transition(.MAIN_MENU) }
+            }
 
             // @todo @move
             if g_state == .MAIN_MENU {
-                if raylib.IsKeyPressed(.LEFT)  { change_menu_selection(-1) }
-                if raylib.IsKeyPressed(.RIGHT) { change_menu_selection(+1) }
-                if raylib.IsKeyPressed(.ENTER) { g_menu.menu_apply_selected_opt = true }
+                if raylib.IsKeyPressed(.LEFT)   { change_menu_selection(-1) }
+                if raylib.IsKeyPressed(.RIGHT)  { change_menu_selection(+1) }
+                if raylib.IsKeyPressed(.ENTER)  { g_menu.menu_apply_selected_opt = true }
+                if raylib.IsKeyPressed(.ESCAPE) { g_close_window = true }
             }
         }
         raylib.PollInputEvents()
@@ -1035,6 +1093,9 @@ main :: proc() {
                 update_and_draw_transition(delta_time)
             }
         }
-
+        
+        if g_close_window {
+            raylib.CloseWindow()
+        }
     }
 }
